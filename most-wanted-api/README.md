@@ -92,6 +92,15 @@ npm run test which is using jest for the project
 ## Ensure also your cors.php config is configured to allow the current frontend url being used to communicate with the backend!
 
 
+#To run Docker make sure it is ran in Windows command prompt and ran the following command:
+
+```sh
+docker-compose down
+docker-compose build
+docker-compose up -d
+```
+
+
 
 ## Troubleshooting
 - **Database issues**: Ensure `.env` is properly configured and MySQL/Postgres service is running.

@@ -6,7 +6,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
-class FetchControllerTest extends TestCase
+class FetchFunctionsTest extends TestCase
 {
     use RefreshDatabase;
 

@@ -1,0 +1,224 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+
+class FetchController extends Controller
+{
+    /**
+     * Handle the fetching of wanted persons data
+     */
+    public function fetchWantedPersons(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $page = (int) $request->get('page', 1);
+        $perPage = (int) $request->get('perPage', 10);
+        $url = env('FBI_API_URL') . "/wanted/v1/list";
+
+        // Get search filters
+        $name = strtolower((string) $request->get('name', ''));
+        $keywords = strtolower((string) $request->get('keywords', ''));
+        $subjects = strtolower((string) $request->get('subjects', ''));
+        $hair = strtolower((string) $request->get('hair_color', ''));
+        $eyes = strtolower((string) $request->get('eyes', ''));
+        $race = strtolower((string) $request->get('race', ''));
+        $nationality = strtolower((string) $request->get('nationality', ''));
+        $uid = strtolower((string) $request->get('uid', ''));
+        // Build API params
+        $params = [
+            'page' => $page,
+            'perPage' => $perPage,
+        ];
+
+        try {
+            $queryString = http_build_query($params);
+            $fullUrl = $url . '?' . $queryString;
+
+            $response = $this->fetchDataWithCurl($fullUrl);
+            $data = json_decode($response, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Error decoding API response.',
+                    'hasMore' => false
+                ], 500);
+            }
+
+            // Process results
+            $wantedPersons = [];
+            if (!empty($data['items'])) {
+                foreach ($data['items'] as $item) {
+                    if ($this->matchesSearch($item, $name, $keywords, $subjects, $hair, $eyes, $race, $nationality,$uid)) {
+                        $thumbnail = $item['images'][0]['thumb'] ?? null;
+                        $imageUrl = $item['images'][0]['original'] ?? $item['images'][0]['large'] ?? null;
+
+                        $wantedPersons[] = [
+                            'name' => $item['title'] ?? 'Unknown',
+                            'description' => $item['description'] ?? 'No description available',
+                            'thumbnail' => $thumbnail,
+                            'image_url' => $imageUrl,
+                            'hair' => $item['hair_raw'] ?? $item['hair'] ?? 'Unknown',
+                            'eyes' => $item['eyes_raw'] ?? $item['eyes'] ?? 'Unknown',
+                            'race' => $item['race_raw'] ?? $item['race'] ?? 'Unknown',
+                            'nationality' => $item['nationality'] ?? 'Unknown',
+                            'caution'=>$item['caution']??'Unknown',
+                            'alert'=>$item['alert']??'Unknown',
+                            'weight'=>$item['weight']??'Unknown',
+                            'details'=>$item['details']??'Unknown',
+                            'subjects' => isset($item['subjects']) && is_array($item['subjects']) ? implode(', ', $item['subjects']) : 'Unknown',
+
+                            'uid'=>$item['uid']??null,
+                            'external_links' => isset($item['files']) ? array_map(function ($file) {
+                                return [
+                                    'label' => $file['name'] ?? 'Download',
+                                    'url' => $file['url'] ?? '#',
+                                ];
+                            }, $item['files']) : [],
+                        ];
+                    }
+                }
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'data' => $wantedPersons,
+                'hasMore' => count($wantedPersons) >= $perPage
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unable to fetch data from the FBI API. Error: ' . $e->getMessage(),
+                'hasMore' => false
+            ], 500);
+        }
+    }
+
+
+    public function fetchWantedPersonDetails(string $uid): \Illuminate\Http\JsonResponse
+    {
+        $url = env('FBI_API_URL') . "/wanted/v1/list";
+
+        try {
+            // Fetch all items from the FBI API
+            $response = $this->fetchDataWithCurl($url);
+            $data = json_decode($response, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Error decoding API response.',
+                ], 500);
+            }
+
+            // Find the specific item by UID
+            $selectedItem = null;
+            foreach ($data['items'] as $item) {
+                if ($item['uid'] === $uid) {
+                    $selectedItem = $item;
+                    break;
+                }
+            }
+
+            if (!$selectedItem) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'User not found.',
+                ], 404);
+            }
+
+            // Process detailed information
+            $details = [
+                'uid' => $selectedItem['@id'] ?? '',
+                'name' => $selectedItem['title'] ?? 'Unknown',
+                'description' => $selectedItem['description'] ?? 'No description available',
+                'caution' => $selectedItem['caution'] ?? '',
+                'field_offices' => $selectedItem['field_offices'] ?? [],
+                'images' => $selectedItem['images'] ?? [],
+                'hair_color' => $selectedItem['hair_color'] ?? '',
+                'eyes' => $selectedItem['eyes'] ?? '',
+                'race' => $selectedItem['race'] ?? '',
+                'nationality' => $selectedItem['nationality'] ?? '',
+                'occupations' => $selectedItem['occupations'] ?? [],
+                'aliases' => $selectedItem['aliases'] ?? [],
+                'external_links' => $selectedItem['external_links'] ?? [], // If provided by the API
+            ];
+
+            return response()->json([
+                'status' => 'success',
+                'data' => $details,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unable to fetch data from the FBI API.',
+            ], 500);
+        }
+    }
+
+    /**
+     * Check if an item matches the search filters.
+     */
+    private function matchesSearch(array $item, string $name, string $keywords, string $subjects, string $hair, string $eyes, string $race, string $nationality,string $uid): bool
+    {
+        // Convert search terms to lowercase
+        $title = strtolower($item['title'] ?? '');
+        $description = strtolower($item['description'] ?? '');
+        $caution = strtolower($item['caution'] ?? '');
+        $subjectList = array_map('strtolower', $item['subjects'] ?? []);
+        $itemHair = strtolower($item['hair_raw'] ?? $item['hair'] ?? '');
+        $itemEyes = strtolower($item['eyes_raw'] ?? $item['eyes'] ?? '');
+        $itemRace = strtolower($item['race_raw'] ?? $item['race'] ?? '');
+        $itemNationality = strtolower($item['nationality'] ?? '');
+
+        // Search logic
+        $matchesName = empty($name) || strpos($title, $name) !== false;
+        $matchesKeywords = empty($keywords) || strpos($description, $keywords) !== false || strpos($caution, $keywords) !== false;
+        $matchesSubjects = empty($subjects) || in_array($subjects, $subjectList) || strpos($description, $subjects) !== false || strpos($caution, $subjects) !== false;
+        $matchesHair = empty($hair) || strpos($itemHair, $hair) !== false;
+        $matchesEyes = empty($eyes) || strpos($itemEyes, $eyes) !== false;
+        $matchesRace = empty($race) || strpos($itemRace, $race) !== false;
+        $matchesNationality = empty($nationality) || strpos($itemNationality, $nationality) !== false;
+        $matchesUid = empty($uid) || strpos($item['uid'], $uid) !== false;
+        return $matchesName && $matchesKeywords && $matchesSubjects && $matchesHair && $matchesEyes && $matchesRace && $matchesNationality && $matchesUid;
+    }
+
+    /**
+     * Fetch data from the given URL using cURL
+     *
+     * @param string $url
+     * @return string|null
+     */
+    private function fetchDataWithCurl(string $url): ?string
+    {
+        // Initialize cURL session
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: FetchWantedList/1.0', // Add a User-Agent header
+        ]);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true); // Follow redirects if any
+
+        // Execute the cURL request
+        $response = curl_exec($ch);
+        $error_message = curl_error($ch);
+
+        if ($response === false) {
+            \Log::error('cURL error: ' . $error_message);
+            curl_close($ch);
+            return null;
+        }
+
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+
+        if ($http_code == 200) {
+            \Log::info('API Response: ' . $response);
+        } else {
+            \Log::error('API Request failed with status code: ' . $http_code);
+        }
+        curl_close($ch);
+
+        return $response;
+    }
+}

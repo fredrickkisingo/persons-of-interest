@@ -1,66 +1,60 @@
 services:
-  # PHP Service
-  php:
+  app:
     build:
-      context: .
-      dockerfile: docker/php/Dockerfile
-    container_name: laravel-php
+      context: ./most-wanted-api
+      dockerfile: Dockerfile
+    container_name: most-wanted-api
+    restart: unless-stopped
+    working_dir: /var/www
     volumes:
-      - ./laravel:/var/www/html
-    networks:
-      - laravel-vue-network
-
-  # Nginx Service
-  nginx:
-    image: nginx:alpine
-    container_name: laravel-nginx
-    ports:
-      - "8080:80"
-    volumes:
-      - ./laravel:/var/www/html
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - php
-    networks:
-      - laravel-vue-network
-
-  # Node.js Service
-  node:
-    build:
-      context: .
-      dockerfile: docker/node/Dockerfile
-    container_name: vue-node
-    volumes:
-      - ./vue:/app
-    ports:
-      - "8081:8080"
-    networks:
-      - laravel-vue-network
-
-  # MySQL Service
-  mysql:
-    image: mysql:8.0
-    container_name: laravel-mysql
+      - ./backend:/var/www
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      - APP_ENV=local
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_DATABASE=laravel
+      - DB_USERNAME=root
+      - DB_PASSWORD=root
+    depends_on:
+      - db
+    networks:
+      - app_network
+
+  frontend:
+    build:
+      context: ./most-wanted-frontend
+      dockerfile: Dockerfile
+    container_name: most-wanted-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    working_dir: /app
+    command: npm run dev
+    networks:
+      - app_network
+
+  db:
+    image: mysql:5.7
+    container_name: mysql_db
+    restart: unless-stopped
+    environment:
       MYSQL_DATABASE: laravel
-      MYSQL_USER: laravel
-      MYSQL_PASSWORD: secret
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: root
     ports:
       - "3306:3306"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - db_data:/var/lib/mysql
     networks:
-      - laravel-vue-network
+      - app_network
 
-
-
-# Volumes
 volumes:
-  mysql-data:
-    driver: local
+  db_data:
 
-# Networks
 networks:
-  laravel-vue-network:
+  app_network:
     driver: bridge
